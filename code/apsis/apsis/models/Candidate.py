@@ -151,3 +151,21 @@ class Candidate(object):
 
         """
         return np.array(self.params)
+
+    def to_dict(self):
+        return self.__dict__
+
+    @staticmethod
+    def from_dict(dict):
+        """
+        Converting from a dictionary duck typed to match candidate to
+        Candidate
+
+        Parameters
+        -----------
+        dict: dict
+            The dictionary duck typed to match Candidate.
+        """
+        return Candidate(dict.get('params'), dict.get('params_used', None),
+                         dict.get('result', 0), dict.get('valid', True),
+                         dict.get('worker_information', None))
