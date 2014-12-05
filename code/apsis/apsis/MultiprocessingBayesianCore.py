@@ -179,56 +179,6 @@ class MultiprocessingBayesianCore(ListBasedCore, Process):
 
         return True
 
-    def next_candidate(self, worker_id=None):
-        # either we have pending candidates
-        if len(self.pending_candidates) > 0:
-            new_candidate = self.pending_candidates.pop(0)
-
-            logging.debug("Core providing pending candidate "
-                          + str(new_candidate))
-
-        # or we need to generate new ones, which either includes random points
-        elif len(self.finished_candidates) <= self.initial_random_runs:
-            new_candidate = self.random_searcher.next_candidate()
-            logging.debug("Core providing new randomly generated candidate " +
-                            str(new_candidate))
-        else:
-            acquisition_params = {'param_defs': self.param_defs,
-                                  'gp': self.gp,
-                                  'cur_max': self.best_candidate.result,
-                                  "minimization": self.minimization
-            }
-
-            logging.debug("Running acquisition with args %s",
-                          str(acquisition_params))
-
-            new_candidate_points = self.acquisition_function.compute_proposal(
-                acquisition_params, refitted=self.just_refitted,
-                number_proposals=self.num_precomputed+1)
-
-            for point in new_candidate_points:
-                for i in range(len(point)):
-                    point[i] = self.param_defs[i].warp_out(
-                        point[i]
-                    )
-                point_candidate = Candidate(point)
-
-                self.pending_candidates.append(point_candidate)
-
-            new_candidate = self.pending_candidates.pop(0)
-            self.just_refitted = False
-
-        # add candidate to working list
-        self.working_candidates.append(new_candidate)
-
-        return new_candidate
-
-    def _check_refit_gp(self):
-        if self.refit_necessary and self.refit_process is not None:
-            self.refit_necessary = False
-            self.refit_process = RefitProcess(self.refit_queue, self.finished_candidates, self.param_defs, self.kernel, self.num_gp_restarts)
-            self.refit_process.start()
-
     def terminate_gracefully(self):
         if self.pending_process is not None:
             self.pending_process.terminate()
