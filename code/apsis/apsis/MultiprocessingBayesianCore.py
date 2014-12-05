@@ -2,7 +2,7 @@ from apsis.OptimizationCoreInterface import OptimizationCoreInterface, \
     ListBasedCore
 from apsis.RandomSearchCore import RandomSearchCore
 from apsis.models.Candidate import Candidate
-from apsis.models.ParamInformation import NumericParamDef, DistanceParamDef
+from apsis.models.ParamInformation import NumericParamDef, PositionParamDef
 from apsis.bayesian.AcquisitionFunctions import ExpectedImprovement
 import numpy as np
 import GPy
@@ -11,14 +11,14 @@ from apsis.utilities.randomization import check_random_state
 import multiprocessing
 from multiprocessing import Process, Queue
 
-class SimpleBayesianOptimizationCore(ListBasedCore):
+class MultiprocessingBayesianCore(ListBasedCore, Process):
     """
     This implements a simple bayesian optimizer.
 
     It is simple because it only implements the simplest form - no freeze-thaw,
     (currently) now multiple workers, only numeric parameters.
     """
-    SUPPORTED_PARAM_TYPES = [NumericParamDef, DistanceParamDef]
+    SUPPORTED_PARAM_TYPES = [NumericParamDef, PositionParamDef]
 
     kernel = None
     acquisition_function = None
@@ -33,16 +33,27 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
     refit_running = False
 
     refit_process = None
-    refit_queue = None
     pending_process = None
+
+    #queues for webservice.:
+    status_update_queue = None
+    pending_queue = None
+
+    #internal queues
+    refit_queue = None
+    generated_pending_queue = None
+
+    pending_min_threshold = 10
+    terminate_event = None
+
 
     gp = None
 
     initial_random_runs = 10
     num_gp_restarts = 10
 
-    def __init__(self, params):
-        super(SimpleBayesianOptimizationCore, self).__init__(params)
+    def __init__(self, params, status_update_queue, pending_queue, terminate_event):
+        super(MultiprocessingBayesianCore, self).__init__(params)
         if params.get('param_defs', None) is None:
             raise ValueError("Parameter definition list is missing!")
         if not self._is_all_supported_param_types(params["param_defs"]):
@@ -63,6 +74,8 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
         self.num_gp_restarts = params.get('num_gp_restarts',
                                           self.num_gp_restarts)
 
+        self.pending_min_threshold = params.get('pending_min_threshold', self.pending_min_threshold)
+
         dimensions = len(self.param_defs)
         self.kernel = params.get('kernel',
                                  GPy.kern.rbf)(dimensions, ARD=True)
@@ -76,11 +89,59 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
 
         self.num_precomputed = params.get('num_precomputed', 0)
         self.refit_queue = Queue()
+        self.generated_pending_queue = Queue()
+
+        self.terminate_event = terminate_event
+        self.status_update_queue = status_update_queue
+        self.pending_queue = pending_queue
+
+    def run(self):
+        while (True):
+            if self.terminate_event.is_set():
+                self.terminate_gracefully()
+            #new gps?
+            while not self.refit_queue.empty():
+                self.gp = self.refit_queue.get()
+                self.just_refitted = True
+                #kill the pending process.
+                if self.pending_process is not None:
+                    self.pending_process.terminate()
+                #and empty the queue.
+                while not self.generated_pending_queue.empty():
+                    self.generated_pending_queue.get()
+                #and empty the pending queue.
+                while not self.pending_queue.empty():
+                    self.pending_queue.get()
+                del self.pending_candidates[:]
+
+            #new points?
+
+            while not self.status_update_queue.empty():
+                candidate, status, worker_id = self.status_update_queue.get()
+                self.working(candidate, status, worker_id)
+
+            if self.refit_necessary and (self.refit_process is None or not self.refit_process.is_alive()):
+                self.refit_necessary = False
+                self.refit_process = RefitProcess(self.refit_queue, self.finished_candidates, self.param_defs, self.kernel, self.num_gp_restarts)
+                self.refit_process.start()
+
+            #new pending proposals?
+            while not self.generated_pending_queue.empty():
+                self.pending_candidates.append(self.generated_pending_queue.get())
+                self.pending_queue.put(self.pending_candidates[-1])
+            #pending empty?
+            if self.pending_queue.empty() or self.pending_queue.qsize() < self.pending_min_threshold:
+                if len(self.finished_candidates) < self.initial_random_runs:
+                    self.generated_pending_queue.append(self.random_searcher.next_candidate())
+                else:
+                    self.pending_process = GeneratePending(self.generated_pending_queue, self.acquisition_function, self.param_defs, self.gp, self.num_precomputed, self.best_candidate, self.minimization, self.just_refitted)
+                    self.pending_process.start()
+                    just_refitted = False
 
 
 
     def working(self, candidate, status, worker_id=None, can_be_killed=False):
-        super(SimpleBayesianOptimizationCore, self).working(
+        super(MultiprocessingBayesianCore, self).working(
             candidate, status, worker_id, can_be_killed)
         logging.debug("Worker " + str(worker_id) + " informed me about work "
                                                    "in status " + str(status)
@@ -98,7 +159,6 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
             # invoke the refitting
             if len(self.finished_candidates) >= self.initial_random_runs:
                 self.refit_necessary = True
-                self._check_refit_gp()
             return False
 
         elif status == "working":
@@ -169,6 +229,13 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
             self.refit_process = RefitProcess(self.refit_queue, self.finished_candidates, self.param_defs, self.kernel, self.num_gp_restarts)
             self.refit_process.start()
 
+    def terminate_gracefully(self):
+        if self.pending_process is not None:
+            self.pending_process.terminate()
+        if self.refit_process is not None:
+            self.refit_process.terminate()
+        self.terminate()
+
 
 class RefitProcess(Process):
     finished_candidates = None
@@ -235,3 +302,49 @@ class RefitProcess(Process):
             )
         logging.debug("New param_vector: %s" % str(param_vector))
         return param_vector
+
+class GeneratePending(Process):
+    acquisition_function = None
+    param_defs = None
+    gp = None
+    best_candidate = None
+    minimization = None
+    num_precomputed = None
+    pending_proposal_queue = None
+    just_refitted = None
+
+    def __init__(self, pending_proposal_queue, acquisition_function,
+                 param_defs, gp, num_precomputed, best_candidate, minimzation, just_refitted):
+        super(GeneratePending, self).__init__()
+        self.pending_proposal_queue = pending_proposal_queue
+        self.acquisition_function = acquisition_function
+        self.param_defs = param_defs
+        self.gp = gp
+        self.num_precomputed = num_precomputed
+        self.best_candidate = best_candidate
+        self.minimization = minimzation
+        self.just_refitted = just_refitted
+        ##TODO do checking of the strings.
+
+    def run(self):
+        acquisition_params = {'param_defs': self.param_defs,
+                              'gp': self.gp,
+                              'cur_max': self.best_candidate.result,
+                              "minimization": self.minimization
+        }
+
+        logging.debug("Running acquisition with args %s",
+                      str(acquisition_params))
+
+        new_candidate_points = self.acquisition_function.compute_proposal(
+            acquisition_params, refitted=self.just_refitted,
+            number_proposals=self.num_precomputed+1)
+
+        for point in new_candidate_points:
+            for i in range(len(point)):
+                point[i] = self.param_defs[i].warp_out(
+                    point[i]
+                )
+            point_candidate = Candidate(point)
+
+            self.pending_proposal_queue.put(point_candidate)
