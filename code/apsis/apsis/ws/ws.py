@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_negotiate import consumes, produces
 from apsis.models.ParamInformation import *
 from apsis.models.Candidate import Candidate
+from apsis.models.Experiment import Experiment, BayesianExperiment
+from multiprocessing import Queue
 import json
 
 import logging
@@ -12,8 +14,19 @@ CONTEXT_ROOT = ""
 
 logging.basicConfig(level=logging.DEBUG)
 
+
+######################
+# Global stuff created before the application WS is instantiated
+######################
+test = "<h1>Welcome to the APSIS REST API.</h1><p>Enjoy.<br>Perhaps the documentation might be shown here soon.</p>"
+
+
 #init Flask, give it core package name of our stuff
 app = Flask('apsis')
+
+######################
+# WS Service Methods
+######################
 
 @app.route(CONTEXT_ROOT + "/", methods=["GET"])
 def test_ws():
@@ -22,8 +35,7 @@ def test_ws():
     to test if the ws is up and running."
     """
 
-    return "<h1>Welcome to the APSIS REST API.</h1><p>Enjoy. " \
-           "Perhaps the documentation might be shown here soon.</p>"
+    return test
 
 
 @app.route(CONTEXT_ROOT + "/experiments", methods=["GET"])
@@ -50,6 +62,7 @@ def register_experiment():
 
     {"experiments": [
             {
+                core: "MultiprocessingBayesianCore",
                 experiment_id: "my_experiment_uuid",
                 param_defs: [
                     {"LowerUpperNumericParamDef": [0, 20]}
@@ -65,11 +78,34 @@ def register_experiment():
 
     data_received = request.get_json()
     experiments_received = data_received.get("experiments", None)
-
     if experiments_received is None:
-         return "ERORR experiments not found in body", 500
+        logging.error("ERORR experiments not found in body. Sending 500.")
+        return "ERORR experiments not found in body", 500
+    if not isinstance(experiments_received, list):
+        logging.error("ERROR experiments in body is not a list. Sending 500.")
+        return "ERROR experiments in body is not a list.", 500
 
     logging.debug("Received Experiments " + jsonify(experiments_received))
+
+    #store experiments
+    experiments = []
+    for i in range(0, len(experiments_received)):
+        single_experiment = experiments_received[i]
+        core_string = single_experiment.get('core', None)
+
+        if core_string is not None and core_string == 'MultiprocessingBayesianCore':
+            try:
+                experiments.append(BayesianExperiment.from_dict(single_experiment))
+            except ValueError:
+                logging.error("Error while instantiating experiment from "
+                              "given JSON. Sending 500")
+                return "ERROR while instantiating experiment from given JSON.", 500
+
+    if len(experiments) < 1:
+        logging.error("No instantiated experiments. Sending 404")
+        return "ERROR - no instantiated experiments given", 404
+
+
     #TODO parse experiment and trigger core instantiation
 
     #TODO return new experiment ids, or the given ones if any
