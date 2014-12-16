@@ -129,7 +129,7 @@ class SimpleBayesianOptimizationCore(ListBasedCore):
                                   'gp': self.gp,
                                   'cur_max': self.best_candidate.result,
                                   "minimization": self.minimization,
-                                  'random_search_steps': 100
+                                  'random_search_steps': 100000
             }
 
             logging.debug("Running acquisition with args %s",

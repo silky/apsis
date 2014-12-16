@@ -13,7 +13,7 @@ import os
 import logging
 import time
 
-#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 def objective_func_from_sklearn(candidate, estimator, param_defs, X, y, parameter_names, scoring="accuracy", cv=3): #gets candidate, returns candidate.
     start_time = time.time()
@@ -47,8 +47,6 @@ def objective_func_from_sklearn(candidate, estimator, param_defs, X, y, paramete
     print("")
     return candidate
 
-
-
 if __name__ == '__main__':
     #load mnist dataset
     mnist = fetch_mldata('MNIST original',
@@ -74,25 +72,30 @@ if __name__ == '__main__':
                       'initial_random_runs': 10}
 
     """sk_adapter = SimpleScikitLearnAdapter(regressor, param_defs,
-                                                  scoring="mean_squared_error",
-                                                  optimizer="SimpleBayesianOptimizationCore",
-                                                  optimizer_arguments=optimizer_args,n_iter=1)"""
+                                              scoring="mean_squared_error",
+                                              optimizer="SimpleBayesianOptimizationCore",
+                                              optimizer_arguments=optimizer_args,n_iter=1)"""
 
 
+    used_size = len(mnist_data_train) / 10.0
+    print("Using mnist of size " + str(used_size))
 
     obj_func_args = {"estimator": regressor,
                      "param_defs": param_defs,
-                     "X": mnist_data_train[:100],
-                     "y": mnist_target_train[:100],
+                     "X": mnist_data_train[:used_size],
+                     "y": mnist_target_train[:used_size],
                      "parameter_names": parameter_names}
 
     ev = EvaluationFramework()
     optimizers = [SimpleBayesianOptimizationCore({"param_defs": param_defs,
                                                   "initial_random_runs": 10})]
-    steps = 25
-    ev.evaluate_optimizers(optimizers, ["BayOpt_MNIST_EI"],
-                           objective_func_from_sklearn, objective_func_args=obj_func_args, obj_func_name="MNIST SVC",
-                           steps=steps, show_plots_at_end=True)
+    steps = 100
+    ev.evaluate_optimizers(optimizers, ["BayOpt_MNIST_GP_EI_Simple"],
+                           objective_func_from_sklearn,
+                           objective_func_args=obj_func_args,
+                           obj_func_name="MNIST SVC",
+                           steps=steps, show_plots_at_end=True,
+                           csv_write_frequency=2, plot_write_frequency=2)
 
     #finally do an evaluation
     print("----------------------------------\nHyperparameter Optimization Finished\n----------------------------------")
