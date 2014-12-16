@@ -6,6 +6,7 @@ from sklearn.svm import NuSVC, SVC
 
 from apsis.adapters.SimpleScikitLearnAdapter import SimpleScikitLearnAdapter
 from apsis.SimpleBayesianOptimizationCore import SimpleBayesianOptimizationCore
+from apsis.RandomSearchCore import RandomSearchCore
 from apsis.evaluation.EvaluationFramework import EvaluationFramework
 from apsis.models.ParamInformation import NumericParamDef, NominalParamDef, \
     LowerUpperNumericParamDef, FixedValueParamDef
@@ -68,7 +69,7 @@ if __name__ == '__main__':
         LowerUpperNumericParamDef(0,1)
     ]
 
-    optimizer_args = {'minimization': True,
+    optimizer_args_random_search = {'minimization': True,
                       'initial_random_runs': 10}
 
     """sk_adapter = SimpleScikitLearnAdapter(regressor, param_defs,
@@ -87,19 +88,27 @@ if __name__ == '__main__':
                      "parameter_names": parameter_names}
 
     ev = EvaluationFramework()
-    optimizers = [SimpleBayesianOptimizationCore({"param_defs": param_defs,
-                                                  "initial_random_runs": 10})]
+
+    optimizer_args_random_search = {"minimization_problem": True,
+                      "param_defs": param_defs}
+    optimizer_args_bayopt = {"param_defs": param_defs, "initial_random_runs": 10}
+
+    optimizers = [
+                    SimpleBayesianOptimizationCore(optimizer_args_bayopt),
+                    RandomSearchCore(optimizer_args_random_search)
+                 ]
+
     steps = 100
-    ev.evaluate_optimizers(optimizers, ["BayOpt_MNIST_GP_EI_Simple"],
+    ev.evaluate_optimizers(optimizers, ["BayOpt_MNIST_10Pct_GP_EI_Simple", "RandomSearch_MNist10Pct"],
                            objective_func_from_sklearn,
                            objective_func_args=obj_func_args,
-                           obj_func_name="MNIST SVC",
+                           obj_func_name="MNIST 10PCT SVC",
                            steps=steps, show_plots_at_end=True,
                            csv_write_frequency=2, plot_write_frequency=2)
 
     #finally do an evaluation
-    print("----------------------------------\nHyperparameter Optimization Finished\n----------------------------------")
-    print("----------------------------------\nTest EVALUATION FOLLOWS\n----------------------------------")
-    scores = cross_val_score(regressor, mnist_data_test, mnist_target_test, scoring="accuracy", cv=3)
-    print(scores)
-    print("----------------------------------\n----------------------------------")
+    #print("----------------------------------\nHyperparameter Optimization Finished\n----------------------------------")
+    #print("----------------------------------\nTest EVALUATION FOLLOWS\n----------------------------------")
+    #scores = cross_val_score(regressor, mnist_data_test, mnist_target_test, scoring="accuracy", cv=3)
+    #print(scores)
+    #print("----------------------------------\n----------------------------------")
